@@ -1,0 +1,18 @@
+/target
+node_modules/
+package.json
+package-lock.json
+test/*.png
+
+# Secrets / local env (never commit real credentials)
+.env
+.env.*
+!env.example
+
+# Agent / editor tooling (not part of the app)
+.claude/
+.github/prompts/
+
+# Python caches
+__pycache__/
+*.pyc

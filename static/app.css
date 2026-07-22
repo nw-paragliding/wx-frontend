@@ -1,0 +1,500 @@
+/* app.css — Application component styles
+ *
+ * Station cells (metric chips + windrose), chart containers,
+ * legend swatches, status indicators, tooltips, uPlot overrides.
+ *
+ * Station-cell internal layout — ONE model at every size:
+ *   [ fixed-width metrics column | windrose ]. The metrics column has a fixed
+ *   width (never content-driven), so changing units or data values can never
+ *   resize the windrose, and the metrics block keeps a constant width. The
+ *   windrose fills its column and is height-bound on wide cells, so it is as
+ *   large as possible and fills the cell vertically. The metrics occupy the
+ *   left space the round windrose doesn't use.
+ *
+ *   The narrow (phone-portrait) container query only bumps font sizes and the
+ *   metrics-column width.
+ */
+
+/* === Station Cell — header over a centered [ metrics | windrose ] body ===
+ * The cell is a column: the header on top, then a body row holding the metrics
+ * and the windrose. The body row is centered, so the windrose sits right beside
+ * the metrics with only a small fixed gap — any leftover width becomes symmetric
+ * margin instead of a gap between them. The metrics column is a FIXED width
+ * (never content-driven), so changing units or values can never resize the
+ * windrose, and the metrics block stays a constant width. The windrose fills
+ * the body height (as large as possible) and shrinks only if width runs out.
+ */
+.station-cell {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: clamp(8px, 1vmin, 16px);
+    gap: var(--sp-1);
+}
+
+/* Station header: fixed row at the top */
+.station-cell > .station-header {
+    flex: none;
+    padding-bottom: var(--sp-1);
+}
+
+/* Subtle divider between station rows — windrose side only (the chart-side
+ * grid lines already separate the rows, so a border there reads as clutter). */
+.station-cell + .station-cell {
+    border-top: 1px solid var(--border-subtle);
+}
+
+/* Body: metrics + windrose as a centered row filling the space below the
+ * header. Centering turns leftover width into symmetric margin rather than a
+ * gap between the metrics and the circle. */
+.station-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    justify-content: center;
+    gap: clamp(8px, 1.6vmin, 18px);
+}
+
+/* Metrics: fixed-width, top-aligned beside the windrose. */
+.station-body > .station-metrics {
+    flex: none;
+    width: var(--_metrics-w, 6.5rem);
+    align-self: flex-start;
+}
+
+/* Windrose: a square filling the body height, shrinking to fit the available
+ * width. Sized only by the body box, never by the metrics. */
+.station-body > .rose-wrap {
+    flex: 0 1 auto;
+    height: 100%;
+    aspect-ratio: 1;
+    min-width: 0;
+}
+
+/* Station header: status dot + name */
+.station-header {
+    display: flex;
+    align-items: center;
+    gap: clamp(4px, 0.5vmin, 8px);
+    flex-shrink: 0;
+    min-height: 0;
+}
+
+.station-name {
+    font-family: var(--ff-ui);
+    font-size: var(--fs-label);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Per-station status dot */
+.station-status {
+    width: clamp(5px, 0.7vmin, 9px);
+    height: clamp(5px, 0.7vmin, 9px);
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--status-live);
+    transition: background 0.3s;
+}
+
+.station-status.live {
+    background: var(--status-live);
+    box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
+}
+
+.station-status.stale {
+    background: var(--status-stale);
+    box-shadow: 0 0 6px rgba(234, 179, 8, 0.4);
+    animation: pulse-status 2s ease-in-out infinite;
+}
+
+.station-status.offline {
+    background: var(--status-offline);
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+    animation: pulse-status 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-status {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.4;
+    }
+}
+
+/* === Metric Chips — Tabular grid ===
+ * Metrics display as a mini-table: columns align across all chips.
+ * Columns: [label] [value] [unit]
+ */
+.station-metrics {
+    display: grid;
+    grid-template-columns: auto 3ch 1fr;
+    gap: var(--sp-1) clamp(3px, 0.4vmin, 6px);
+    align-items: baseline;
+    min-height: 0;
+}
+
+/* Groups dissolve into the grid so all chips share columns */
+.metric-group {
+    display: contents;
+}
+
+/* Individual metric chip — also dissolves into parent grid */
+.metric-chip {
+    display: contents;
+    font-size: var(--fs-stat);
+    line-height: 1;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+}
+
+.metric-label {
+    font-family: var(--ff-ui);
+    color: var(--fg-muted);
+    font-weight: 500;
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-align: right;
+}
+
+.metric-val {
+    font-family: var(--ff-data);
+    color: var(--fg);
+    font-weight: 700;
+    font-size: var(--fs-stat);
+    white-space: nowrap;
+    text-align: right;
+}
+
+.metric-unit {
+    font-family: var(--ff-ui);
+    color: var(--fg-dim);
+    font-size: var(--fs-xs);
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+/* === Windrose ===
+ * A square box (placement sets its size); the SVG centers itself inside and
+ * sizes to the smaller of width/height via its viewBox.
+ */
+.rose-wrap {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.rose-wrap svg {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    aspect-ratio: 1;
+}
+
+/* === Chart Cell (C2) === */
+.chart-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.chart-wrap {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Time-axis chart fills the C2 footer row (shared x labels). */
+.time-axis {
+    width: 100%;
+    height: 100%;
+}
+
+/* === Footer / Legend ===
+ * Speed bucket swatches matching the windrose petals and metric dots.
+ * Sizing is em-relative to .footer-legend's font-size so it stays
+ * stable when --_footer-h is tuned for vertical tightness.
+ */
+.footer-legend {
+    font-size: var(--fs-sm);
+    line-height: 1;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(0.6em, 1.2vw, 1.2em);
+    padding: 0 0.6em;
+}
+
+.legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+}
+
+.legend-swatch {
+    display: inline-block;
+    width: 1.2em;
+    height: 0.7em;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.legend-label {
+    font-family: var(--ff-data);
+    color: var(--fg-dim);
+    font-size: inherit;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
+
+.legend-swatch.s1 {
+    background: var(--swatch-1);
+}
+.legend-swatch.s2 {
+    background: var(--swatch-2);
+}
+.legend-swatch.s3 {
+    background: var(--swatch-3);
+}
+.legend-swatch.s4 {
+    background: var(--swatch-4);
+}
+.legend-swatch.s5 {
+    background: var(--swatch-5);
+}
+.legend-swatch.s6 {
+    background: var(--swatch-6);
+}
+
+/* (Single layout model for all sizes: the station-cell is always a
+ *  [ metrics | windrose ] grid. Layout level handles wide vs narrow via
+ *  scroll-snap.) */
+
+/* === Narrow-only overrides (phone portrait) ===
+ * Same [ metrics | windrose ] layout as wide — just larger fonts, a slightly
+ * wider metrics column, a frosted metrics panel, and card separators between
+ * stations. Scroll-snap between C1 (windroses) and C2 (charts) is handled by
+ * layout.css.
+ */
+@container grid (max-aspect-ratio: 2 / 3) {
+    .station-cell {
+        padding: clamp(8px, 1.5vmin, 14px);
+        gap: clamp(4px, 0.8vmin, 8px);
+        /* Roomier metrics column on phones for the larger fonts. */
+        --_metrics-w: 5.9rem;
+        --fs-label: clamp(13px, 3vw, 18px);
+        --fs-stat: clamp(13px, 2.8vw, 17px);
+        --fs-sm: clamp(10px, 2vw, 13px);
+        --fs-xs: clamp(9px, 1.8vw, 12px);
+        --fs-unit: var(--fs-xs);
+    }
+
+    .station-cell > .station-header {
+        padding-bottom: clamp(2px, 0.4vmin, 6px);
+    }
+
+    /* Subtle frosted backing so the metrics stay legible. */
+    .station-body > .station-metrics {
+        gap: clamp(4px, 0.8vmin, 7px) clamp(2px, 0.4vmin, 5px);
+        padding: clamp(4px, 0.8vmin, 7px) clamp(3px, 0.5vmin, 6px);
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: clamp(4px, 0.6vmin, 8px);
+    }
+
+    .station-cell .metric-val {
+        font-size: clamp(15px, 4.2vw, 20px);
+        font-weight: 700;
+    }
+
+    .station-cell .metric-label {
+        font-size: var(--fs-xs);
+        opacity: 0.85;
+    }
+
+    .station-cell .station-name {
+        font-size: clamp(15px, 3.5vw, 22px);
+        font-weight: 700;
+        letter-spacing: 0.06em;
+    }
+
+    /* Windrose: pad slightly for cardinal labels (size comes from the flex
+     * body + aspect-ratio, so no width/height override here). */
+    .station-body > .rose-wrap {
+        padding: clamp(2px, 0.5vmin, 6px);
+    }
+
+    /* Station cards fill full width (no 1:1 constraint) */
+    .aspect-square > .cell {
+        aspect-ratio: auto;
+        width: 100%;
+    }
+    .aspect-square {
+        justify-items: stretch;
+    }
+}
+
+/* === Tooltip === */
+.tooltip {
+    position: fixed;
+    pointer-events: none;
+    z-index: 1000;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: var(--fs-sm);
+    box-shadow:
+        0 4px 20px rgba(0, 0, 0, 0.5),
+        0 0 1px rgba(255, 255, 255, 0.06);
+    color: var(--fg);
+    display: none;
+    line-height: 1.5;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+.tooltip .tt-val {
+    font-weight: 700;
+}
+
+/* === Synced cursor readout (charts) === */
+.cursor-dot,
+.cursor-hline,
+.cursor-label {
+    position: absolute;
+    pointer-events: none;
+    display: none;
+}
+
+.cursor-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    background: transparent;
+    box-shadow: 0 0 0 1.5px rgba(11, 14, 20, 0.7);
+    transform: translate(-50%, -50%);
+    z-index: 6;
+}
+
+/* Faint horizontal guide line snapped to the data value. */
+.cursor-hline {
+    left: 0;
+    width: 100%;
+    height: 0;
+    border-top: 1px dashed rgba(140, 152, 172, 0.45);
+    transform: translateY(-0.5px);
+    z-index: 4;
+}
+
+/* Value readout pinned to the y-axis gutter, styled like an axis tick but with
+ * a background so it floats over the static tick labels. */
+.cursor-label {
+    left: 0;
+    transform: translate(-100%, -50%);
+    font:
+        10px system-ui,
+        sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 3px;
+    line-height: 1.5;
+    white-space: nowrap;
+    z-index: 7;
+}
+
+/* Time readout sits on the footer x-axis at the cursor. */
+.cursor-label.cursor-time {
+    left: auto;
+    transform: translate(-50%, -50%);
+}
+
+/* Match the synced crosshair: faint dashed vertical line. */
+.u-cursor-x {
+    border-right-color: rgba(140, 152, 172, 0.45) !important;
+}
+
+/* === µPlot overrides === */
+.uplot,
+.uplot *,
+.uplot *::before,
+.uplot *::after {
+    box-sizing: border-box;
+}
+
+.uplot {
+    font-family: inherit;
+    width: 100% !important;
+}
+
+.u-wrap {
+    width: 100% !important;
+}
+
+.u-over {
+    cursor: crosshair;
+}
+
+.u-legend {
+    display: none;
+}
+
+.uplot .u-axis {
+    color: var(--fg-muted);
+}
+
+/* === Reduced motion === */
+@media (prefers-reduced-motion: reduce) {
+    .station-status.stale,
+    .station-status.offline {
+        animation: none;
+    }
+    .cycle-btn {
+        transition-duration: 0.01s;
+    }
+}
+
+/* === Forced-colors (Windows High Contrast) === */
+@media (forced-colors: active) {
+    :root {
+        --bg: Canvas;
+        --bg-surface: Canvas;
+        --bg-elevated: Canvas;
+        --border: CanvasText;
+        --fg: CanvasText;
+        --fg-muted: CanvasText;
+        --fg-dim: CanvasText;
+        --accent: LinkText;
+    }
+    .rose-wrap svg {
+        forced-color-adjust: none;
+    }
+    .uplot canvas {
+        forced-color-adjust: none;
+    }
+}

@@ -1,0 +1,96 @@
+/* theme.css — Colors, fonts, sizing tokens, reset
+ *
+ * Dark palette inspired by aviation/weather instruments.
+ * All sizing uses clamp() for fluid scaling.
+ */
+
+:root {
+    color-scheme: dark;
+
+    /* ── Modular type scale ──
+     * Anchored at --fs-base with a ~1.2 ratio.
+     * All text sizes derive from these four tokens. */
+    --fs-xs: clamp(9px, 1.1vmin, 12px);
+    --fs-sm: clamp(10px, 1.3vmin, 13px);
+    --fs-base: clamp(11px, 1.5vmin, 15px);
+    --fs-lg: clamp(13px, 1.8vmin, 18px);
+
+    /* Compatibility aliases — narrow-mode overrides target these */
+    --fs-label: var(--fs-lg);
+    --fs-stat: var(--fs-base);
+    --fs-unit: var(--fs-sm);
+
+    /* ── Spacing scale ──
+     * Consistent rhythm for gaps, padding, margins. */
+    --sp-1: clamp(2px, 0.3vh, 4px);
+    --sp-2: clamp(4px, 0.6vh, 8px);
+    --sp-3: clamp(8px, 1.2vh, 14px);
+    --sp-4: clamp(12px, 1.8vh, 20px);
+
+    /* ── Layout sizing ── */
+    --control-h: clamp(24px, 3vh, 34px);
+    --icon-size: clamp(20px, 2.8vh, 28px);
+    --title-size: clamp(14px, 2.2vh, 22px);
+    --header-py: clamp(3px, 0.5vh, 7px);
+    --header-px: clamp(10px, 4vw, 18px);
+    --header-gap: clamp(6px, 1vw, 10px);
+    --footer-h: clamp(20px, 2.6vh, 30px);
+    --row-gap: clamp(4px, 0.8vh, 12px);
+    --rows: 3;
+
+    /* Typography — Fira Code + Fira Sans pairing for dashboard data typography */
+    --ff-ui:
+        "Fira Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+    --ff-data: "Fira Code", "Cascadia Code", "SF Mono", "Consolas", monospace;
+
+    /* ── Theme colours — dark palette ── */
+    --bg: #0a0a0a;
+    --bg-surface: #141416;
+    --bg-elevated: #1e1e22;
+    --fg: #ececec;
+    --fg-muted: #b7c0cf;
+    --fg-dim: #8c98ac;
+    --border: #2f333c;
+    --border-subtle: #24272f;
+    --accent: #4f8ef7;
+    --accent-dim: rgba(79, 142, 247, 0.16);
+    --accent-glow: rgba(79, 142, 247, 0.32);
+    --sun: #ffc24d;
+    --sun-glow: rgba(255, 194, 77, 0.45);
+    --cloud: #dbe4f3;
+
+    /* Speed bucket swatches */
+    --swatch-1: #59b95d;
+    --swatch-2: #a5cc47;
+    --swatch-3: #d9c23a;
+    --swatch-4: #e8a33a;
+    --swatch-5: #e07538;
+    --swatch-6: #d94040;
+
+    /* Status colors */
+    --status-live: #22c55e;
+    --status-stale: #eab308;
+    --status-offline: #ef4444;
+}
+
+/* === Reset === */
+*,
+*::before,
+*::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font: 16px/1 var(--ff-ui);
+    color: var(--fg);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
