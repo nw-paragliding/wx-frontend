@@ -1216,6 +1216,30 @@ function dropStation(station) {
   delete stationTs[station];
 }
 
+// How old a station's data actually is, measured from the newest reading's own
+// timestamp rather than from when we happened to receive it.
+//
+// Receipt time is not good enough. The windrose is computed over the whole
+// selected range, so a sensor that died 10 minutes ago still produces
+// total > 0 on a 15m range — the server hands us a real response built from
+// readings that stopped 10 minutes back. Stamping that as "just received"
+// would show a green dot and a full rose for a dead sensor. The newest
+// timeseries point is the honest clock; receipt time is only a fallback for
+// when we have rose data but no points to date it by.
+function stationAgeMs(station, now) {
+  var pts = tsData[station];
+  if (pts && pts.length) {
+    var newest = 0;
+    for (var i = 0; i < pts.length; i++) {
+      if (pts[i].t > newest) newest = pts[i].t;
+    }
+    if (newest > 0) return now - newest * 1000; // points carry unix seconds
+  }
+  var ts = stationTs[station];
+  // No timestamp at all means it predates this cache version — treat as stale.
+  return ts == null ? Infinity : now - ts;
+}
+
 // Expire any station whose newest data is older than CACHE_TTL_MS. Runs on
 // every render cycle — including failed ones — so a page left open while the
 // backend is unreachable blanks out instead of showing indefinitely old wind.
@@ -1226,9 +1250,7 @@ function expireStale() {
   for (var i = 0; i < CFG.stations.length; i++) {
     var st = CFG.stations[i];
     if (!stationData[st] && !tsData[st]) continue;
-    var ts = stationTs[st];
-    // No timestamp at all means it predates this cache version — treat as stale.
-    if (ts == null || now - ts > CACHE_TTL_MS) {
+    if (stationAgeMs(st, now) > CACHE_TTL_MS) {
       dropStation(st);
       updateStationStatus(st, false);
       expired = true;
@@ -1357,7 +1379,12 @@ function refreshAll() {
     });
 
   var tsPromise = fetchTimeseries();
-  return Promise.all([windPromise, tsPromise]);
+  // Wind and timeseries resolve independently, and a station's true age comes
+  // from its timeseries points — so the age check is only meaningful once both
+  // have landed. Re-check here and blank anything that turns out to be old.
+  return Promise.all([windPromise, tsPromise]).then(function () {
+    if (expireStale()) renderAllStations();
+  });
 }
 
 function scheduleRefresh() {
@@ -1379,7 +1406,6 @@ function handleWsSnapshot(msg) {
   if (msg.range && msg.range !== timeRange) return;
   var map = msg.stations || {};
   var gotData = false;
-  expireStale();
   for (var i = 0; i < CFG.stations.length; i++) {
     var st = CFG.stations[i];
     if (map[st] && map[st].total > 0) {
@@ -1393,37 +1419,31 @@ function handleWsSnapshot(msg) {
       dropStation(st);
       updateStationStatus(st, false);
     }
-    var roseWrap = document.getElementById("rose-" + st);
-    if (roseWrap) renderWindrose(roseWrap, stationData[st], st);
-    renderMetrics(st);
-  }
-  if (gotData) {
-    lsSave(LS_DATA_KEY, stationData);
-    lsSave(LS_STATION_TS_KEY, stationTs);
   }
 
-  // Handle timeseries data
+  // Timeseries arrives in the same message. Apply it before expiring, because
+  // a station's true age is read from its newest point.
   var tsMap = msg.timeseries || {};
   for (var i = 0; i < CFG.stations.length; i++) {
     var st = CFG.stations[i];
     if (tsMap[st]) {
       // An empty array means the station reported nothing, so assign it rather
-      // than keeping old points. Guarding on length here (but not in
-      // fetchTimeseries) is what made the chart blank only after an HTTP
-      // refresh — the two update paths disagreed.
+      // than keeping old points.
       tsData[st] = tsMap[st];
     }
   }
-  computeSharedScales();
-  for (var i = 0; i < CFG.stations.length; i++) {
-    var st = CFG.stations[i];
-    var pts = tsData[st] && tsData[st].length > 0 ? tsData[st] : [];
-    renderSpeedChart(st, pts);
-    renderDirChart(st, pts);
+
+  // Now that both halves are in, drop anything whose readings are too old --
+  // including data this very snapshot delivered, since the windrose is built
+  // over the whole range and outlives the sensor by up to that range.
+  expireStale();
+  renderAllStations();
+
+  if (gotData) {
+    lsSave(LS_DATA_KEY, stationData);
+    lsSave(LS_STATION_TS_KEY, stationTs);
   }
-  renderTimeAxis();
   lsSave(LS_TS_DATA_KEY, tsData);
-  lsSave(LS_STATION_TS_KEY, stationTs);
 }
 
 // Tell the server which time range this client wants (the server pushes

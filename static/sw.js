@@ -73,53 +73,12 @@ self.addEventListener("fetch", function (event) {
     return;
   }
 
-  // Wind data & timeseries API: network-first, fall back to last cached response
-  if (url.pathname === "/api/wind" || url.pathname === "/api/timeseries") {
-    event.respondWith(
-      fetch(event.request)
-        .then(function (response) {
-          if (response.ok) {
-            var clone = response.clone();
-            caches.open(CACHE_NAME).then(function (cache) {
-              // Cache keyed by the full URL including ?range= query
-              cache.put(event.request, clone);
-            });
-          }
-          return response;
-        })
-        .catch(function () {
-          // Network failed — try to serve the cached version for this
-          // exact range, or fall back to any cached wind response
-          return caches.match(event.request).then(function (cached) {
-            if (cached) return cached;
-
-            // Last resort: return any cached response for this
-            // same API path (different time range is better than nothing)
-            var apiPath = url.pathname;
-            return caches.open(CACHE_NAME).then(function (cache) {
-              return cache.keys().then(function (keys) {
-                for (var i = 0; i < keys.length; i++) {
-                  var k = new URL(keys[i].url);
-                  if (k.pathname === apiPath) {
-                    return cache.match(keys[i]);
-                  }
-                }
-                // Nothing cached at all — return a synthetic
-                // empty-but-valid JSON so the app doesn't crash
-                return new Response(JSON.stringify({ stations: {} }), {
-                  status: 200,
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-Windrose-Offline": "true",
-                  },
-                });
-              });
-            });
-          });
-        }),
-    );
-    return;
-  }
+  // Wind and timeseries responses are deliberately NOT cached. Serving a
+  // cached one resolves fetch() with a normal 200, so the app cannot tell it
+  // from a live reading: it would stamp hours-old data as just-received, show
+  // a green "live" dot, and defeat the staleness TTL entirely. Letting the
+  // request fail instead lets the app fall back to its own timestamped cache
+  // and blank anything older than the TTL.
 
   // Everything else: plain network fetch
   event.respondWith(fetch(event.request));

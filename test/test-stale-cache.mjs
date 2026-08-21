@@ -33,8 +33,13 @@ const rose = (station, total) => ({
   latest_speed: 11.4, latest_dir: 338,
   petals: [{ idx: 0, angle: 0, count: total, speed_buckets: [] }],
 });
-const pts = (n) =>
-  Array.from({ length: n }, (_, i) => ({ t: 1787270000 + i, speed: 5, dir: 340 }));
+// `n` points, the newest of them `ageSec` seconds before T0. Staleness is now
+// judged from the readings' own timestamps, so fixtures must be dated.
+const T0_SEC = T0 / 1000;
+const pts = (n, ageSec = 0, refSec = T0_SEC) =>
+  Array.from({ length: n }, (_, i) => ({
+    t: refSec - ageSec - (n - 1 - i), speed: 5, dir: 340,
+  }));
 
 // The server omits a station whose query failed, and includes one that was
 // queried successfully but had no readings (total 0 / empty points).
@@ -112,7 +117,7 @@ function load() {
 function withCachedDeadStation() {
   const { ctx, seen } = load();
   ctx.stationData[DEAD] = rose(DEAD, 210);
-  ctx.tsData[DEAD] = pts(3);
+  ctx.tsData[DEAD] = pts(3);    // dated at T0, i.e. current
   ctx.markFresh(DEAD);          // real cached data always carries a stamp
   return { ctx, seen };
 }
@@ -183,7 +188,7 @@ group("cache TTL");
 {
   const { ctx } = load();
   ctx.__seed("windrose_data_v4", { [DEAD]: rose(DEAD, 210) });
-  ctx.__seed("windrose_ts_data_v4", { [DEAD]: pts(3) });
+  ctx.__seed("windrose_ts_data_v4", { [DEAD]: pts(3, 6 * 60) });
   ctx.__seed("windrose_station_ts_v4", { [DEAD]: T0 - 6 * MIN });
   ctx.hydrateFromLocalStorage();
   check("cold load drops cache older than TTL", !ctx.stationData[DEAD]);
@@ -206,12 +211,50 @@ group("cache TTL");
 group("TTL is per-station, not global");
 {
   const { ctx } = withCachedDeadStation();
-  routeFetch(ctx, WIND_DEAD_ABSENT, TS_DEAD_ABSENT);   // dead station never reports
+  const later = T0 + 6 * MIN;
+  // The neighbour is genuinely still reporting, so its points are dated now;
+  // the dead station is simply absent from both responses.
+  routeFetch(ctx, WIND_DEAD_ABSENT, {
+    stations: { [LIVE]: { points: pts(50, 0, later / 1000) } },
+  });
   ctx.markFresh(LIVE);
-  ctx.__setNow(T0 + 6 * MIN);                          // neighbours keep reporting
+  ctx.__setNow(later);
   await ctx.refreshAll();
   check("dead station expires anyway", !ctx.stationData[DEAD]);
   check("reporting neighbour unaffected", !!ctx.stationData[LIVE]);
+}
+
+group("data dated older than the TTL expires even when freshly received");
+{
+  // A sensor that died 10 minutes ago still yields total > 0 on a 15m range:
+  // the server builds a real response from readings that stopped 10 min back.
+  // Receipt time would call this fresh, so age must come from the readings.
+  const { ctx, seen } = load();
+  const stale = {
+    stations: { [DEAD]: rose(DEAD, 120), [LIVE]: rose(LIVE, 200) },
+  };
+  const staleTs = {
+    stations: {
+      [DEAD]: { points: pts(40, 10 * 60) },  // newest reading is 10 min old
+      [LIVE]: { points: pts(40, 0) },        // current
+    },
+  };
+  routeFetch(ctx, stale, staleTs);
+  await ctx.refreshAll();
+  check("station with 10-min-old readings expired", !ctx.stationData[DEAD]);
+  check("its chart cleared too", (seen.speed[DEAD] || []).length === 0);
+  check("station with current readings kept", !!ctx.stationData[LIVE]);
+  check("dot not left green for the dead one", seen.status[DEAD] === false,
+    String(seen.status[DEAD]));
+}
+{
+  // Just inside the window must survive, or the TTL is doing nothing useful.
+  const { ctx } = load();
+  routeFetch(ctx,
+    { stations: { [DEAD]: rose(DEAD, 120) } },
+    { stations: { [DEAD]: { points: pts(40, 3 * 60) } } });  // 3 min old
+  await ctx.refreshAll();
+  check("readings 3 min old are still shown", !!ctx.stationData[DEAD]);
 }
 
 group("expiry runs without any network traffic (stalled WebSocket)");
