@@ -38,12 +38,10 @@ if ("serviceWorker" in navigator) {
 // ── localStorage helpers ─────────────────────────────────────────
 var LS_CFG_KEY = "windrose_cfg_v4";
 var LS_DATA_KEY = "windrose_data_v4";
-var LS_TS_KEY = "windrose_ts_v4";
-var LS_RANGE_KEY = "windrose_range_v4";
 var LS_TS_DATA_KEY = "windrose_ts_data_v4";
-// Per-station "when did we last get real data" map. LS_TS_KEY is global and is
-// refreshed whenever *any* station reports, so it can't expire a single dead
-// station while its neighbours keep reporting — hence a separate per-station map.
+// Per-station "when did we last get real data" map. This replaced a single
+// global stamp, which was refreshed whenever *any* station reported and so
+// could never expire one dead station while its neighbours kept reporting.
 var LS_STATION_TS_KEY = "windrose_station_ts_v4";
 
 // How long a cached reading may still be shown. Past this, a station's rose and
@@ -98,8 +96,6 @@ var speedCharts = {};
 var dirCharts = {};
 var timeAxisChart = null;
 var LEGEND_COLORS = [];
-var lastFetchOk = true;
-var lastFetchTs = 0;
 var sharedSpeedMax = 0;
 var sharedTimeMin = null;
 var sharedTimeMax = null;
@@ -1340,9 +1336,7 @@ function refreshAll() {
       }
       if (gotData) {
         lsSave(LS_DATA_KEY, stationData);
-        lsSave(LS_TS_KEY, Date.now());
         lsSave(LS_STATION_TS_KEY, stationTs);
-        lsSave(LS_RANGE_KEY, timeRange);
       }
     })
     .catch(function (e) {
@@ -1405,7 +1399,6 @@ function handleWsSnapshot(msg) {
   }
   if (gotData) {
     lsSave(LS_DATA_KEY, stationData);
-    lsSave(LS_TS_KEY, Date.now());
     lsSave(LS_STATION_TS_KEY, stationTs);
   }
 
@@ -1571,7 +1564,6 @@ function hydrateFromLocalStorage() {
   if (cachedCfg) applyCfg(cachedCfg);
 
   var cachedData = lsLoad(LS_DATA_KEY);
-  var cachedTs = lsLoad(LS_TS_KEY);
   if (cachedData && typeof cachedData === "object") {
     for (var key in cachedData) {
       var d = cachedData[key];
@@ -1580,10 +1572,6 @@ function hydrateFromLocalStorage() {
       }
     }
     stationData = cachedData;
-    if (cachedTs) {
-      lastFetchTs = cachedTs;
-      lastFetchOk = false;
-    }
   }
 
   var cachedTsData = lsLoad(LS_TS_DATA_KEY);
