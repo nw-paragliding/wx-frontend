@@ -38,9 +38,18 @@ if ("serviceWorker" in navigator) {
 // ── localStorage helpers ─────────────────────────────────────────
 var LS_CFG_KEY = "windrose_cfg_v4";
 var LS_DATA_KEY = "windrose_data_v4";
-var LS_TS_KEY = "windrose_ts_v4";
-var LS_RANGE_KEY = "windrose_range_v4";
 var LS_TS_DATA_KEY = "windrose_ts_data_v4";
+// Per-station "when did we last get real data" map. This replaced a single
+// global stamp, which was refreshed whenever *any* station reported and so
+// could never expire one dead station while its neighbours kept reporting.
+var LS_STATION_TS_KEY = "windrose_station_ts_v4";
+
+// How long a cached reading may still be shown. Past this, a station's rose and
+// charts blank out rather than presenting old wind as if it were current. This
+// is a launch-decision tool: showing nothing is safer than showing stale.
+var CACHE_TTL_MS = 5 * 60 * 1000;
+// How often to check for expiry. Well under the TTL so blanking lands promptly.
+var TTL_SWEEP_MS = 20 * 1000;
 
 function lsSave(key, val) {
   try {
@@ -81,12 +90,12 @@ var refreshMs = 15000;
 var refreshTimer = null;
 var stationData = {};
 var tsData = {};
+// station -> epoch ms when that station last returned real data
+var stationTs = {};
 var speedCharts = {};
 var dirCharts = {};
 var timeAxisChart = null;
 var LEGEND_COLORS = [];
-var lastFetchOk = true;
-var lastFetchTs = 0;
 var sharedSpeedMax = 0;
 var sharedTimeMin = null;
 var sharedTimeMax = null;
@@ -1195,6 +1204,77 @@ function computeSharedScales() {
 }
 
 // ── Data fetching ────────────────────────────────────────────────
+// Record that this station just delivered real data.
+function markFresh(station) {
+  stationTs[station] = Date.now();
+}
+
+// Forget a station's cached data entirely (dead sensor, or aged out).
+function dropStation(station) {
+  delete stationData[station];
+  delete tsData[station];
+  delete stationTs[station];
+}
+
+// How old a station's data actually is, measured from the newest reading's own
+// timestamp rather than from when we happened to receive it.
+//
+// Receipt time is not good enough. The windrose is computed over the whole
+// selected range, so a sensor that died 10 minutes ago still produces
+// total > 0 on a 15m range — the server hands us a real response built from
+// readings that stopped 10 minutes back. Stamping that as "just received"
+// would show a green dot and a full rose for a dead sensor. The newest
+// timeseries point is the honest clock; receipt time is only a fallback for
+// when we have rose data but no points to date it by.
+function stationAgeMs(station, now) {
+  var pts = tsData[station];
+  if (pts && pts.length) {
+    var newest = 0;
+    for (var i = 0; i < pts.length; i++) {
+      if (pts[i].t > newest) newest = pts[i].t;
+    }
+    if (newest > 0) return now - newest * 1000; // points carry unix seconds
+  }
+  var ts = stationTs[station];
+  // No timestamp at all means it predates this cache version — treat as stale.
+  return ts == null ? Infinity : now - ts;
+}
+
+// Expire any station whose newest data is older than CACHE_TTL_MS. Runs on
+// every render cycle — including failed ones — so a page left open while the
+// backend is unreachable blanks out instead of showing indefinitely old wind.
+// Returns true if anything was expired.
+function expireStale() {
+  var now = Date.now();
+  var expired = false;
+  for (var i = 0; i < CFG.stations.length; i++) {
+    var st = CFG.stations[i];
+    if (!stationData[st] && !tsData[st]) continue;
+    if (stationAgeMs(st, now) > CACHE_TTL_MS) {
+      dropStation(st);
+      updateStationStatus(st, false);
+      expired = true;
+    }
+  }
+  return expired;
+}
+
+// Re-render every station from current state. Used after an expiry sweep so the
+// blanking is visible without waiting for the next successful fetch.
+function renderAllStations() {
+  computeSharedScales();
+  for (var i = 0; i < CFG.stations.length; i++) {
+    var st = CFG.stations[i];
+    var roseWrap = document.getElementById("rose-" + st);
+    if (roseWrap) renderWindrose(roseWrap, stationData[st], st);
+    renderMetrics(st);
+    var pts = tsData[st] && tsData[st].length > 0 ? tsData[st] : [];
+    renderSpeedChart(st, pts);
+    renderDirChart(st, pts);
+  }
+  renderTimeAxis();
+}
+
 function fetchTimeseries() {
   return fetch("/api/timeseries?range=" + timeRange)
     .then(function (r) {
@@ -1206,6 +1286,9 @@ function fetchTimeseries() {
       for (var i = 0; i < CFG.stations.length; i++) {
         var st = CFG.stations[i];
         if (map[st] && map[st].points) {
+          // Presence, not length: a present-but-empty points array is the
+          // server saying "this station has no readings", which must clear the
+          // chart. An absent station means the query failed — keep what we have.
           tsData[st] = map[st].points;
         }
       }
@@ -1218,6 +1301,7 @@ function fetchTimeseries() {
       }
       renderTimeAxis();
       lsSave(LS_TS_DATA_KEY, tsData);
+      lsSave(LS_STATION_TS_KEY, stationTs);
     })
     .catch(function (e) {
       console.error("Timeseries fetch error", e);
@@ -1244,14 +1328,27 @@ function refreshAll() {
     .then(function (batch) {
       var map = batch.stations || {};
       var gotData = false;
+      // Age out anything past the TTL before applying the new batch, so a
+      // station absent from this response doesn't linger indefinitely.
+      expireStale();
       for (var i = 0; i < CFG.stations.length; i++) {
         var st = CFG.stations[i];
         var cell = document.getElementById("station-" + st);
         if (!cell) continue;
         if (map[st] && map[st].total > 0) {
           stationData[st] = map[st];
+          markFresh(st);
           gotData = true;
           updateStationStatus(st, true);
+        } else if (map[st]) {
+          // The server queried this station fine and it has no readings in
+          // range — the sensor is down. Drop the last known reading so the
+          // rose empties out instead of showing wind that stopped blowing
+          // hours ago. A station missing from the response entirely means the
+          // query itself failed; that falls through below and keeps the last
+          // known data on purpose (offline tolerance), until the TTL expires it.
+          dropStation(st);
+          updateStationStatus(st, false);
         } else if (!stationData[st]) {
           updateStationStatus(st, false);
         }
@@ -1261,17 +1358,19 @@ function refreshAll() {
       }
       if (gotData) {
         lsSave(LS_DATA_KEY, stationData);
-        lsSave(LS_TS_KEY, Date.now());
-        lsSave(LS_RANGE_KEY, timeRange);
+        lsSave(LS_STATION_TS_KEY, stationTs);
       }
     })
     .catch(function (e) {
       console.error("Fetch error", e);
+      // Can't reach the server: keep showing the last known data, but only
+      // until it ages past the TTL.
+      expireStale();
       for (var i = 0; i < CFG.stations.length; i++) {
         var st = CFG.stations[i];
         updateStationStatus(st, false);
         var cell = document.getElementById("station-" + st);
-        if (cell && stationData[st]) {
+        if (cell) {
           var roseWrap = document.getElementById("rose-" + st);
           if (roseWrap) renderWindrose(roseWrap, stationData[st], st);
           renderMetrics(st);
@@ -1280,7 +1379,12 @@ function refreshAll() {
     });
 
   var tsPromise = fetchTimeseries();
-  return Promise.all([windPromise, tsPromise]);
+  // Wind and timeseries resolve independently, and a station's true age comes
+  // from its timeseries points — so the age check is only meaningful once both
+  // have landed. Re-check here and blank anything that turns out to be old.
+  return Promise.all([windPromise, tsPromise]).then(function () {
+    if (expireStale()) renderAllStations();
+  });
 }
 
 function scheduleRefresh() {
@@ -1306,34 +1410,39 @@ function handleWsSnapshot(msg) {
     var st = CFG.stations[i];
     if (map[st] && map[st].total > 0) {
       stationData[st] = map[st];
+      markFresh(st);
       gotData = true;
       updateStationStatus(st, true);
+    } else if (map[st]) {
+      // Present but empty = "no readings", not "no update". Clear it, matching
+      // refreshAll(), so a dead station's rose doesn't stay frozen.
+      dropStation(st);
+      updateStationStatus(st, false);
     }
-    var roseWrap = document.getElementById("rose-" + st);
-    if (roseWrap) renderWindrose(roseWrap, stationData[st], st);
-    renderMetrics(st);
-  }
-  if (gotData) {
-    lsSave(LS_DATA_KEY, stationData);
-    lsSave(LS_TS_KEY, Date.now());
   }
 
-  // Handle timeseries data
+  // Timeseries arrives in the same message. Apply it before expiring, because
+  // a station's true age is read from its newest point.
   var tsMap = msg.timeseries || {};
   for (var i = 0; i < CFG.stations.length; i++) {
     var st = CFG.stations[i];
-    if (tsMap[st] && tsMap[st].length > 0) {
+    if (tsMap[st]) {
+      // An empty array means the station reported nothing, so assign it rather
+      // than keeping old points.
       tsData[st] = tsMap[st];
     }
   }
-  computeSharedScales();
-  for (var i = 0; i < CFG.stations.length; i++) {
-    var st = CFG.stations[i];
-    var pts = tsData[st] && tsData[st].length > 0 ? tsData[st] : [];
-    renderSpeedChart(st, pts);
-    renderDirChart(st, pts);
+
+  // Now that both halves are in, drop anything whose readings are too old --
+  // including data this very snapshot delivered, since the windrose is built
+  // over the whole range and outlives the sensor by up to that range.
+  expireStale();
+  renderAllStations();
+
+  if (gotData) {
+    lsSave(LS_DATA_KEY, stationData);
+    lsSave(LS_STATION_TS_KEY, stationTs);
   }
-  renderTimeAxis();
   lsSave(LS_TS_DATA_KEY, tsData);
 }
 
@@ -1475,7 +1584,6 @@ function hydrateFromLocalStorage() {
   if (cachedCfg) applyCfg(cachedCfg);
 
   var cachedData = lsLoad(LS_DATA_KEY);
-  var cachedTs = lsLoad(LS_TS_KEY);
   if (cachedData && typeof cachedData === "object") {
     for (var key in cachedData) {
       var d = cachedData[key];
@@ -1484,16 +1592,22 @@ function hydrateFromLocalStorage() {
       }
     }
     stationData = cachedData;
-    if (cachedTs) {
-      lastFetchTs = cachedTs;
-      lastFetchOk = false;
-    }
   }
 
   var cachedTsData = lsLoad(LS_TS_DATA_KEY);
   if (cachedTsData && typeof cachedTsData === "object") {
     tsData = cachedTsData;
   }
+
+  var cachedStationTs = lsLoad(LS_STATION_TS_KEY);
+  if (cachedStationTs && typeof cachedStationTs === "object") {
+    stationTs = cachedStationTs;
+  }
+
+  // Drop anything that aged out while the tab was closed, before it can be
+  // painted. Without this a cold load shows yesterday's wind until the first
+  // response lands.
+  expireStale();
 }
 
 // ── Init ─────────────────────────────────────────────────────────
@@ -1586,6 +1700,14 @@ function init() {
     }
     refreshAll();
   });
+
+  // Enforce the cache TTL on its own clock. Neither channel is guaranteed to
+  // tick: scheduleRefresh() is never started, and a silently-stalled WebSocket
+  // delivers nothing at all — so without this, expiry would never run and old
+  // wind could sit on screen indefinitely.
+  setInterval(function () {
+    if (expireStale()) renderAllStations();
+  }, TTL_SWEEP_MS);
 
   // Do one HTTP fetch for immediate data, then switch to WebSocket push
   refreshAll().then(function () {
